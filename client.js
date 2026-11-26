@@ -104,6 +104,33 @@ window.__ModuleLoader__.load({
 
       ctx.effect(() => {
         let held
+        let dismissTimer
+        let emptyRow
+        const emptyFeedback = `${activity}[data-voice-activity="feedback"]`
+        function isEmptyFeedback(row) {
+          if (!row?.isConnected || !row.matches(emptyFeedback)) return false
+          const message = row.querySelector('[role="status"]')?.textContent.trim()
+          return message === '未识别到语音' || message === 'No speech recognized'
+        }
+        // ponytail: the official toolbar has no typed feedback event. Match only
+        // the empty-transcript message; errors and recoverable drafts stay visible.
+        const feedbackObserver = new MutationObserver(() => {
+          const row = oneVisible(document, emptyFeedback)
+          const next = isEmptyFeedback(row) ? row : undefined
+          if (next === emptyRow) return
+          clearTimeout(dismissTimer)
+          emptyRow = next
+          if (!next) return
+          dismissTimer = setTimeout(() => {
+            if (isEmptyFeedback(next) && oneVisible(document, emptyFeedback) === next) {
+              oneVisible(next, cancel)?.click()
+            }
+          }, 1000)
+        })
+        feedbackObserver.observe(document.body, {
+          subtree: true, childList: true, characterData: true,
+          attributes: true, attributeFilter: ['data-voice-activity'],
+        })
         let disposeWait
         forget = () => { if (held) held.auto = undefined; disposeWait?.() }
 
@@ -118,16 +145,24 @@ window.__ModuleLoader__.load({
             if (row.isConnected) return
             observer.disconnect()
             if (!transcribing) { dispose(); return }
-            frame = requestAnimationFrame(() => {
-              dispose()
+            const deadline = performance.now() + 750
+            function submitWhenDraftReady() {
               if (!snapshot.entry.enabled || document.hidden || !document.hasFocus() || oneVisible(document, modal) ||
-                  composer !== snapshot.entry || !composer.element?.isConnected || !oneVisible(document, start)) return
+                  composer !== snapshot.entry || !composer.element?.isConnected) { dispose(); return }
               const input = composer.input
-              if (!clean(input) || input.draftRev !== snapshot.revision + 1 ||
-                  composer.inputActions.captureInsertion().draftRev !== input.draftRev ||
-                  !input.draft.trim() || input.draft.trimStart().startsWith('/')) return
-              composer.inputActions.submit()
-            })
+              const revision = composer.inputActions.captureInsertion().draftRev
+              const expected = snapshot.revision + 1
+              if (!clean(input) || revision > expected || input.draftRev > expected) { dispose(); return }
+              // The toolbar can disappear before the editor and its slot publish the new draft.
+              if (revision < expected || input.draftRev < expected || !oneVisible(document, start)) {
+                if (performance.now() < deadline) frame = requestAnimationFrame(submitWhenDraftReady)
+                else dispose()
+                return
+              }
+              dispose()
+              if (input.draft.trim() && !input.draft.trimStart().startsWith('/')) composer.inputActions.submit()
+            }
+            frame = requestAnimationFrame(submitWhenDraftReady)
           })
           const timeout = setTimeout(() => dispose(), 120_000)
           function dispose() {
@@ -191,6 +226,8 @@ window.__ModuleLoader__.load({
           window.removeEventListener('blur', abort)
           document.removeEventListener('visibilitychange', visibility)
           for (const type of ['pointerdown', 'beforeinput', 'input', 'drop', 'paste']) window.removeEventListener(type, forget, true)
+          feedbackObserver.disconnect()
+          clearTimeout(dismissTimer)
           abort()
         }
       })

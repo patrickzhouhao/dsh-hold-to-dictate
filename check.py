@@ -36,10 +36,17 @@ with sync_playwright() as p:
                   row.dataset.voiceActivity = 'transcribing';
                   setTimeout(() => {
                     if (!row.isConnected) return;
-                    if (result === null) { row.dataset.voiceActivity = 'feedback'; return; }
-                    input.draft += result;
-                    ++input.draftRev;
+                    if (result === null || result === '' || result === 'No speech recognized') {
+                      row.dataset.voiceActivity = 'feedback';
+                      const status = document.createElement('span');
+                      status.setAttribute('role', 'status');
+                      status.textContent = result === null ? '语音识别失败' : result || '未识别到语音';
+                      row.append(status);
+                      return;
+                    }
                     idle();
+                    // Model the official toolbar resetting before the editor publishes.
+                    setTimeout(() => { input.draft += result; ++input.draftRev; }, 80);
                   }, delay);
                 };
               };
@@ -146,9 +153,9 @@ with sync_playwright() as p:
         assert toggle.is_checked()
         assert page.evaluate("localStorage.getItem('dsh-hold-to-dictate.auto-send.session.session-new')") == 'true'
 
-        def dictate(text='你好', draft='', attachments=None, delay=30):
-            page.evaluate('([text, draft, attachments, ms]) => { result = text; input.draft = draft; input.attachmentIds = attachments; delay = ms; calls.length = 0; idle(); }',
-                          [text, draft, attachments or [], delay])
+        def dictate(text='你好', draft='', attachments=None, delay=30, reset_toolbar=True):
+            page.evaluate('([text, draft, attachments, ms, reset]) => { result = text; input.draft = draft; input.attachmentIds = attachments; delay = ms; calls.length = 0; if (reset) idle(); }',
+                          [text, draft, attachments or [], delay, reset_toolbar])
             page.locator('#chat').click()
             page.keyboard.press('Space')
 
@@ -165,6 +172,16 @@ with sync_playwright() as p:
             dictate(text, draft, attachments)
             page.wait_for_timeout(100)
             assert page.evaluate('calls') == ['start', 'stop']
+        page.wait_for_timeout(2600)
+        assert page.get_by_role('status').inner_text() == '语音识别失败'
+        for text, message in [('', '未识别到语音'), ('No speech recognized', 'No speech recognized')]:
+            dictate(text)
+            page.get_by_text(message, exact=True).wait_for()
+            page.get_by_text(message, exact=True).wait_for(state='detached', timeout=1400)
+            assert page.evaluate('calls') == ['start', 'stop', 'cancel']
+            assert toggle.is_checked()
+            dictate(reset_toolbar=False)
+            page.wait_for_function("calls.join(',') === 'start,stop,send'")
         dictate(delay=150)
         page.keyboard.press('Escape')
         page.wait_for_timeout(200)
