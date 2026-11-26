@@ -1,0 +1,3 @@
+- insert:
+    - id: hold-to-dictate
+      name: '@local/dsh-hold-to-dictate'

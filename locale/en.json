@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Hold to dictate",
+    "description": "In a chat, hold Space outside editable fields and controls to record. Release to transcribe into the draft. Optional auto-send is off by default. Requires ready official Voice Input."
+  }
+}
